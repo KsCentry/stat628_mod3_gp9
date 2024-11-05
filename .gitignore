@@ -1,6 +1,5 @@
-Airplane_DataDescription.docx
-Airplane_ExampleSummary.docx
-Airplane_GradingGuideline.docx
+*.docx
+*.pdf
 
 data/raw_data/
 data/cleaned_data

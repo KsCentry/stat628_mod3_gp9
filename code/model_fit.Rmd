@@ -1,0 +1,333 @@
+---
+title: "Untitled"
+author: "Leyan"
+date: "2024-11-07"
+output: html_document
+---
+```{r}
+data <- read_parquet("../data/cleaned_data/data_with_all_weather.parquet")
+```
+
+```{r include=FALSE}
+library(arrow)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+```
+
+```{r}
+# Feature engineering the departure time
+time_data <- data %>%
+  mutate(hour = hour(DEP_TIMESTAMP),
+         time_of_day = case_when(
+           hour >= 5 & hour < 12 ~ "Morning",
+           hour >= 12 & hour < 18 ~ "Afternoon",
+           hour >= 18 & hour <= 23 ~ "Evening",
+           TRUE ~ "Night"
+         ))
+```
+```{r}
+# calculated Cancellation rates by time period
+cancel_rate_time_season <- time_data %>%
+  group_by(time_of_day) %>%
+  summarise(cancel_rate = mean(CANCELLED)) %>%
+  ungroup()
+print(cancel_rate_time_season)
+
+```
+```{r}
+ggplot(cancel_rate_time_season, aes(x = time_of_day, y = cancel_rate)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Cancellation Rate by Time of Day",
+       x = "Time of Day",
+       y = "Cancellation Rate") 
+
+```
+
+
+
+
+
+```{r}
+# Feature engineering the bad weather
+
+# Clear flight information that lacks weather data, as these cancellations are definitely not due to weather
+weather_data <- data %>%
+  filter(!is.na(p01i), !is.na(vsby), !is.na(sknt), !is.na(tmpf))
+
+# According to some information of the internet to determine roughly what kind of weather is bad weather
+weather_data <- weather_data %>%
+  mutate(
+    bad_weather = ifelse((p01i > 0.1 | vsby < 1 | sknt > 30 | tmpf < 0 | tmpf > 105), 1, 0)
+  )
+
+```
+
+
+```{r}
+cancel_rate_weather <- weather_data %>%
+  group_by(bad_weather) %>%
+  summarise(cancel_rate = mean(CANCELLED)) %>%
+  ungroup()
+print(cancel_rate_weather)
+```
+
+```{r}
+# Calculate the total weather delay rate
+weather_delay_rate <- data %>%
+# Calculate the total number of flights and the number of flights delayed due  to weather
+  summarise(
+    total_flights = n(),
+    weather_delayed_flights = sum(WEATHER_DELAY > 0, na.rm = TRUE)
+  ) %>%
+# Calculate weather delay rates
+  mutate(weather_delay_rate = weather_delayed_flights / total_flights * 100)
+
+
+print(weather_delay_rate)
+
+
+```
+
+
+```{r}
+carrier_proportion <- data %>%
+  count(OP_UNIQUE_CARRIER) %>%
+  mutate(proportion = n / sum(n) * 100)
+
+
+
+print(carrier_proportion)
+
+
+```
+
+```{r}
+# Calculate the delay rate for each airline for different reasons of delay and calculate the total delay rate
+carrier_delay_rate <- data %>%
+
+  group_by(OP_UNIQUE_CARRIER) %>%
+  # Calculate the total number of flights for each airline and the number of delayed flights for different reasons of delay
+  summarise(
+    total_flights = n(),
+    carrier_delayed_flights = sum(CARRIER_DELAY > 0, na.rm = TRUE),
+    late_aircraft_delayed_flights = sum(LATE_AIRCRAFT_DELAY > 0, na.rm = TRUE)
+  ) %>%
+  # Calculate and sum the delay rates for different causes of delay
+  mutate(
+    carrier_delay_rate = carrier_delayed_flights / total_flights * 100,
+    late_aircraft_delay_rate = late_aircraft_delayed_flights / total_flights * 100,
+    total_delay_rate = carrier_delay_rate + late_aircraft_delay_rate  
+  ) %>%
+
+  arrange(desc(total_delay_rate))
+
+
+print(carrier_delay_rate)
+
+
+```
+```{r}
+
+carrier_cancel_rate <- data %>%
+
+  group_by(OP_UNIQUE_CARRIER) %>%
+
+  summarise(
+    total_flights = n(),
+    cancelled_flights = sum(CANCELLED == 1, na.rm = TRUE)
+  ) %>%
+  mutate(cancel_rate = cancelled_flights / total_flights * 100) %>%
+  arrange(desc(cancel_rate))
+
+print(carrier_cancel_rate)
+```
+```{r}
+# Calculate the cancellation rate due to NAS
+nas_cancel_rate <- data %>%
+  filter(CANCELLED == 1 & CANCELLATION_CODE == "C") %>%
+  summarise(
+    total_flights = nrow(data),
+    nas_cancelled_flights = n()
+  ) %>%
+
+  mutate(nas_cancel_rate = nas_cancelled_flights / total_flights * 100)
+
+print(nas_cancel_rate)
+```
+```{r}
+# Calculate the delay rate due to NAS
+nas_delay_rate <- data %>%
+  summarise(
+    total_flights = n(),
+    nas_delayed_flights = sum(NAS_DELAY > 0, na.rm = TRUE)
+  ) %>%
+  mutate(nas_delay_rate = nas_delayed_flights / total_flights * 100)
+
+print(nas_delay_rate)
+```
+```{r}
+# Count the number of routes
+route_counts <- data %>%
+  group_by(ORIGIN, DEST) %>%
+  summarise(count = n()) %>%
+  arrange(desc(count))
+
+print(route_counts)
+```
+```{r}
+
+
+# Total number of delays for each route
+route_total_delay_count <- data %>%
+  group_by(ORIGIN, DEST) %>%
+  summarise(
+    delay_count = sum(
+      (CARRIER_DELAY > 0) | (WEATHER_DELAY > 0) | (NAS_DELAY > 0) | 
+      (SECURITY_DELAY > 0) | (LATE_AIRCRAFT_DELAY > 0), 
+      na.rm = TRUE
+    )
+  ) %>%
+  arrange(desc(delay_count))
+
+print(route_total_delay_count)
+
+```
+```{r}
+
+# Total number of cancle for each route
+route_cancel_count <- data %>%
+  group_by(ORIGIN, DEST) %>%
+  summarise(cancel_count = sum(CANCELLED == 1, na.rm = TRUE)) %>%
+  arrange(desc(cancel_count))
+
+print(route_cancel_count)
+```
+
+```{r}
+# The round trip route from ORD to LGA is very suitable, with a large passenger flow and one of the most delayed and cancelled rate flights
+ord_lga_flights <- data %>%
+  filter((ORIGIN == "ORD" & DEST == "LGA") | (ORIGIN == "LGA" & DEST == "ORD"))
+
+```
+
+```{r}
+# feature engineering for time
+ord_lga_flights <- ord_lga_flights %>%
+  mutate(hour = hour(DEP_TIMESTAMP),
+         time_of_day = case_when(
+           hour >= 5 & hour < 12 ~ "Morning",
+           hour >= 12 & hour < 18 ~ "Afternoon",
+           hour >= 18 & hour <= 23 ~ "Evening",
+           TRUE ~ "Night"
+         ))
+```
+
+
+```{r}
+# Calculate the time difference between the actual arrival time and the planned arrival time
+ord_lga_flights <- ord_lga_flights %>%
+  mutate(
+    ARR_DELAY = as.numeric(difftime(ARR_TIMESTAMP, CRS_ARR_TIMESTAMP, units = "mins")),
+    ARR_DELAY = ifelse(ARR_DELAY < 0, 0, ARR_DELAY)  # Set to 0 if the delay time is negative
+  )
+
+head(ord_lga_flights)  
+```
+
+```{r}
+# Calculate the total delay 
+ord_lga_flights <- ord_lga_flights %>%
+  mutate(
+    total_delay = coalesce(CARRIER_DELAY, 0) + 
+                  coalesce(WEATHER_DELAY, 0) + 
+                  coalesce(NAS_DELAY, 0) + 
+                  coalesce(SECURITY_DELAY, 0) + 
+                  coalesce(LATE_AIRCRAFT_DELAY, 0)
+  )
+```
+
+```{r}
+# Solve the NA of the data set
+library(tidyr)
+
+ord_lga_flights <- ord_lga_flights %>%
+  mutate(across(where(is.numeric), ~replace_na(., 0))) %>%    
+  mutate(across(where(is.character), ~replace_na(., ""))) 
+
+```
+
+```{r}
+
+# Calculate weather-related correlations
+weather_vars <- ord_lga_flights %>%
+  select(tmpf, relh, p01i, mslp, dwpf, vsby, sknt, alti, 
+         tmpf_arr, relh_arr, p01i_arr, mslp_arr, dwpf_arr, vsby_arr, sknt_arr, alti_arr)
+
+
+weather_cor <- cor(weather_vars, use = "complete.obs")
+
+print(weather_cor)
+
+install.packages("corrplot")
+library(corrplot)
+
+corrplot(weather_cor, method = "color", type = "upper", 
+         tl.col = "black", tl.srt = 45, title = "Weather Variables Correlation")
+```
+
+
+```{r}
+linear_model <- lm(ARR_DELAY ~ OP_CARRIER_FL_NUM+OP_UNIQUE_CARRIER+tmpf+p01i+mslp+relh+sknt+vsby+CARRIER_DELAY+WEATHER_DELAY+NAS_DELAY+SECURITY_DELAY+LATE_AIRCRAFT_DELAY+time_of_day+total_delay,data = ord_lga_flights)
+summary(linear_model)
+```
+```{r}
+backward_model <- step(linear_model, direction = "backward")
+```
+
+```{r}
+linear_model <- lm(ARR_DELAY ~ OP_CARRIER_FL_NUM + OP_UNIQUE_CARRIER + tmpf + relh + sknt + vsby + CARRIER_DELAY + WEATHER_DELAY + NAS_DELAY + SECURITY_DELAY + LATE_AIRCRAFT_DELAY + time_of_day,data = ord_lga_flights)
+
+summary(linear_model)
+```
+
+
+
+
+
+
+```{r}
+table(ord_lga_flights$CANCELLED)
+
+```
+```{r}
+
+set.seed(42)
+# Build data set
+train_index <- sample(1:nrow(ord_lga_flights), 0.8 * nrow(ord_lga_flights))
+train_data <- ord_lga_flights[train_index, ]
+test_data <- ord_lga_flights[-train_index, ]
+```
+
+```{r}
+logit_model <- glm(CANCELLED ~ OP_UNIQUE_CARRIER + NAS_DELAY + SECURITY_DELAY + tmpf + relh + sknt + vsby+ time_of_day, data = train_data, family = binomial)
+summary(logit_model)
+```
+```{r}
+
+test_predictions <- predict(logit_model, newdata = test_data, type = "response")
+
+test_data$predicted_cancel <- ifelse(test_predictions > 0.2, 1, 0)
+```
+
+```{r}
+
+install.packages("caret")
+library(caret)
+```
+
+```{r}
+
+confusionMatrix(as.factor(test_data$predicted_cancel), as.factor(test_data$CANCELLED))
+```
+

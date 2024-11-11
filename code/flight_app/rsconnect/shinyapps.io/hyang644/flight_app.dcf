@@ -1,0 +1,12 @@
+name: flight_app
+title: flight_app
+username: hyang644
+account: hyang644
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 13286692
+bundleId: 9345823
+url: https://hyang644.shinyapps.io/flight_app/
+version: 1
+asMultiple: FALSE
+asStatic: FALSE
